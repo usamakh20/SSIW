@@ -1,0 +1,11 @@
+opencv-python==4.7.0.72
+torch==1.13.1
+torchvision==0.14.1
+tqdm==4.65.0
+Pillow==9.4.0
+PyYAML==6.0
+gensim==4.3.0
+mmsegmentation==0.30.0
+mmcv==1.7.1
+timm==0.6.12
+sentence-transformers==2.2.2

@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 
-import os, sys
-CODE_SPACE=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import os
+import sys
+
+CODE_SPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(CODE_SPACE)
 os.chdir(CODE_SPACE)
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import argparse
 import cv2
@@ -16,23 +18,24 @@ import torch
 import torch.nn.functional as F
 import json
 
-
 import utils.config as config
 from utils.config import CfgNode
 from utils.transforms_utils import get_imagenet_mean_std, normalize_img, pad_to_crop_sz, resize_by_scaled_short_side
-import matplotlib.pyplot as plt
-from utils.color_seg import color_seg
+from utils.color_seg import color_seg, PALETTE, add_legend, calculate_accuracy
 
 import glob
-from PIL import Image
-from utils.labels_dict import UNI_UID2UNAME, ALL_LABEL2ID, UNAME2EM_NAME
+from utils.labels_dict import UNI_UID2UNAME
 import torch.multiprocessing as mp
 from utils.segformer import get_configured_segformer
 from tqdm import tqdm
 import torch.distributed as dist
+import torchvision.transforms as transforms
 
 from utils.get_class_emb import create_embs_from_names
 import ast
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+transform = transforms.ToTensor()
 
 
 def get_logger():
@@ -48,6 +51,7 @@ def get_logger():
         logger.addHandler(handler)
     return logger
 
+
 logger = get_logger()
 
 
@@ -56,55 +60,47 @@ def get_parser() -> CfgNode:
     TODO: add to library to avoid replication.
     """
     parser = argparse.ArgumentParser(description='Yvan Yin\'s Semantic Segmentation Model.')
-    parser.add_argument('--root_dir', type=str, help='root dir for the data')
-    parser.add_argument('--cam_id', type=str, help='camera ID')
+    parser.add_argument('--root_dir', type=str, default='test_imgs/default', help='root dir for the data')
+    parser.add_argument('--cam_id', type=str, default='01', help='camera ID')
     parser.add_argument('--img_folder', default='image_', type=str, help='the images folder name except the camera ID')
-    parser.add_argument('--img_file_type', default='jpeg', type=str, help='the file type of images, such as jpeg, png, jpg...')
+    parser.add_argument('--img_file_type', default='png', type=str,
+                        help='the file type of images, such as jpeg, png, jpg...')
 
-    parser.add_argument('--config', type=str, default='720_ss', help='config file')
+    parser.add_argument('--config', type=str, default='test_720_ss', help='config file')
     parser.add_argument('--gpus_num', type=int, default=1, help='number of gpus')
     parser.add_argument('--save_folder', type=str, default='ann/semantics', help='the folder for saving semantic masks')
 
-    parser.add_argument('--user_label', nargs='*', help='the label user identified for semantic segmentation')
+    parser.add_argument('--user_label', nargs='*', default=[],
+                        help='the label user identified for semantic segmentation')
     parser.add_argument('--new_definitions', type=ast.literal_eval, help='new label definitions identified by user')
-    parser.add_argument('opts', help='see mseg_semantic/config/test/default_config_360.yaml for all options, models path should be passed in',
-        default=None, nargs=argparse.REMAINDER)
+    parser.add_argument('opts',
+                        help='see mseg_semantic/config/test/default_config_360.yaml for all options, models path should be passed in',
+                        default=None, nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
     config_path = os.path.join('configs', f'{args.config}.yaml')
-    args.config = config_path
+    cfg = config.load_cfg_from_cfg_file(config_path)
 
     # test on samples
-    if args.root_dir is None:
-        args.root_dir = f'{CODE_SPACE}/test_imgs'
-        args.cam_id='01'
-        args.img_file_type = 'png'
+    cfg.root_dir = f'{CODE_SPACE}/{cfg.get("root_dir", default=args.root_dir)}'
 
-
-    if args.user_label:
-        args.user_label = [i for i in args.user_label]
-
-    assert args.config is not None
-    cfg = config.load_cfg_from_cfg_file(args.config)
-    cfg.root_dir = args.root_dir
     cfg.cam_id = args.cam_id
     cfg.img_folder = args.img_folder
-    cfg.img_file_type = args.img_file_type
-    cfg.gpus_num = args.gpus_num
-    cfg.save_folder = args.save_folder
+    cfg.new_definitions = cfg.get('new_definitions', default=args.new_definitions)
+    cfg.img_file_type = cfg.get('img_file_type', default=args.img_file_type)
+    cfg.gpus_num = cfg.get('gpus_num', default=args.gpus_num)
+    cfg.save_folder = cfg.get('save_folder', default=args.save_folder)
+    cfg.user_label = cfg.get('user_label', default=args.user_label)
 
-    cfg.user_label = args.user_label
-    cfg.new_definitions = args.new_definitions
     return cfg
 
 
-  
 def get_prediction(embs, gt_embs_list):
     prediction = []
     logits = []
     B, _, _, _ = embs.shape
     for b in range(B):
-        score = embs[b,...]
+        score = embs[b, ...]
         score = score.unsqueeze(0)
         emb = gt_embs_list
         emb = emb / emb.norm(dim=1, keepdim=True)
@@ -122,20 +118,20 @@ def get_prediction(embs, gt_embs_list):
         logit = torch.cat(logits, dim=0)
     return logit
 
-  
+
 def single_scale_single_crop_cuda(model,
-                      image: np.ndarray,
-                      h: int, w: int, gt_embs_list,
-                      args=None) -> np.ndarray:
+                                  image: np.ndarray,
+                                  h: int, w: int, gt_embs_list,
+                                  args=None) -> np.ndarray:
     ori_h, ori_w, _ = image.shape
     mean, std = get_imagenet_mean_std()
     crop_h = (np.ceil((ori_h - 1) / 32) * 32).astype(np.int32)
     crop_w = (np.ceil((ori_w - 1) / 32) * 32).astype(np.int32)
-    
+
     image, pad_h_half, pad_w_half = pad_to_crop_sz(image, crop_h, crop_w, mean)
     image_crop = torch.from_numpy(image.transpose((2, 0, 1))).float()
     normalize_img(image_crop, mean, std)
-    image_crop = image_crop.unsqueeze(0).cuda()
+    image_crop = image_crop.unsqueeze(0).to(DEVICE)
     with torch.no_grad():
         emb, _, _ = model(inputs=image_crop, label_space=['universal'])
         logit = get_prediction(emb, gt_embs_list)
@@ -152,10 +148,10 @@ def single_scale_single_crop_cuda(model,
     prediction = cv2.resize(prediction_crop, (w, h), interpolation=cv2.INTER_LINEAR)
     return prediction
 
-  
+
 def single_scale_cuda(model,
                       image: np.ndarray,
-                      h: int, w: int, gt_embs_list, stride_rate: float = 2/3,
+                      h: int, w: int, gt_embs_list, stride_rate: float = 2 / 3,
                       args=None) -> np.ndarray:
     mean, std = get_imagenet_mean_std()
     crop_h = args.test_h
@@ -163,13 +159,13 @@ def single_scale_cuda(model,
     ori_h, ori_w, _ = image.shape
     image, pad_h_half, pad_w_half = pad_to_crop_sz(image, crop_h, crop_w, mean)
     new_h, new_w, _ = image.shape
-    stride_h = int(np.ceil(crop_h*stride_rate))
-    stride_w = int(np.ceil(crop_w*stride_rate))
-    grid_h = int(np.ceil(float(new_h-crop_h)/stride_h) + 1)
-    grid_w = int(np.ceil(float(new_w-crop_w)/stride_w) + 1)
+    stride_h = int(np.ceil(crop_h * stride_rate))
+    stride_w = int(np.ceil(crop_w * stride_rate))
+    grid_h = int(np.ceil(float(new_h - crop_h) / stride_h) + 1)
+    grid_w = int(np.ceil(float(new_w - crop_w) / stride_w) + 1)
 
-    prediction_crop = torch.zeros((gt_embs_list.shape[0], new_h, new_w)).cuda()
-    count_crop = torch.zeros((new_h, new_w)).cuda()
+    prediction_crop = torch.zeros((gt_embs_list.shape[0], new_h, new_w)).to(DEVICE)
+    count_crop = torch.zeros((new_h, new_w)).to(DEVICE)
     # loop w/ sliding window, obtain start/end indices
     for index_h in range(0, grid_h):
         for index_w in range(0, grid_w):
@@ -193,27 +189,28 @@ def single_scale_cuda(model,
 
     prediction_crop /= count_crop.unsqueeze(0)
     # disregard predictions from padded portion of image
-    prediction_crop = prediction_crop[:, pad_h_half:pad_h_half+ori_h, pad_w_half:pad_w_half+ori_w]
+    prediction_crop = prediction_crop[:, pad_h_half:pad_h_half + ori_h, pad_w_half:pad_w_half + ori_w]
 
     # CHW -> HWC
-    prediction_crop = prediction_crop.permute(1,2,0)
+    prediction_crop = prediction_crop.permute(1, 2, 0)
     prediction_crop = prediction_crop.data.cpu().numpy()
 
     # upsample or shrink predictions back down to scale=1.0
     prediction = cv2.resize(prediction_crop, (w, h), interpolation=cv2.INTER_LINEAR)
     return prediction
 
-  
+
 def do_test(args, local_rank):
     imgs_on_devices = organize_images(args, local_rank)
     model = get_configured_segformer(args.num_model_classes,
                                      criterion=None,
-                                     load_imagenet_model=False)
+                                     load_imagenet_model=False,
+                                     batch_norm_gpu=bool(args.gpus_num))
     model.eval()
 
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model.cuda(),
-                                                          device_ids=[local_rank,],
+        model = torch.nn.parallel.DistributedDataParallel(model.to(DEVICE),
+                                                          device_ids=[local_rank, ],
                                                           output_device=local_rank,
                                                           find_unused_parameters=True)
     else:
@@ -224,7 +221,6 @@ def do_test(args, local_rank):
     ckpt_filter = {k: v for k, v in checkpoint.items() if 'criterion.0.criterion.weight' not in k}
     model.load_state_dict(ckpt_filter, strict=False)
 
-
     if args.user_label:
         if args.new_definitions:
             gt_embs_list = create_embs_from_names(args.user_label, args.new_definitions).float()
@@ -233,7 +229,7 @@ def do_test(args, local_rank):
         args.id_to_label = {i: v for i, v in enumerate(args.user_label)}
         args.id_to_label[255] = 'unlabel'
     else:
-        gt_embs_list = torch.tensor(np.load(args.emb_path)).cuda().float()
+        gt_embs_list = torch.tensor(np.load(args.emb_path)).to(DEVICE).float()
         args.id_to_label = UNI_UID2UNAME
         if args.new_definitions:
             new_labels = [label for label in args.new_definitions.keys()]
@@ -242,19 +238,19 @@ def do_test(args, local_rank):
             gt_embs_list = torch.cat([gt_embs_list, new_embs], dim=0)
             nums = len(args.id_to_label)
             for i in range(len(new_labels)):
-                args.id_to_label[nums+i-1] = new_labels[i]
-
+                args.id_to_label[nums + i - 1] = new_labels[i]
 
     test_single(args, imgs_on_devices, local_rank, model, gt_embs_list)
 
 
 def test_single(args, imgs_list, local_rank, model, gt_embs_list):
+    accuracies = []
     for i, rgb_path in tqdm(enumerate(imgs_list)):
         save_path = os.path.join(args.root_dir, args.save_folder, os.path.basename(rgb_path))
         save_path = os.path.splitext(save_path)[0] + '.png'
-        
+
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
+
         rgb = cv2.imread(rgb_path, -1)[:, :, ::-1]
         image_resized = resize_by_scaled_short_side(rgb, args.base_size, 1)
         h, w, _ = rgb.shape
@@ -263,19 +259,17 @@ def test_single(args, imgs_list, local_rank, model, gt_embs_list):
             out_logit = single_scale_single_crop_cuda(model, image_resized, h, w, gt_embs_list=gt_embs_list, args=args)
         elif args.single_scale_multi_crop:
             out_logit = single_scale_cuda(model, image_resized, h, w, gt_embs_list=gt_embs_list, args=args)
-                                      
-        prediction = out_logit.argmax(axis=-1).squeeze()   # (h, w)
+
+        prediction = out_logit.argmax(axis=-1).squeeze()  # (h, w)
         probs = out_logit.max(axis=-1).squeeze()  # (h, w)
         high_prob_mask = probs > 0.5
-        
+
         mask = high_prob_mask
         prediction[~mask] = 255
 
         labels = np.unique(prediction)
         label_names = {i: args.id_to_label[i] for i in labels}
         # label_names = [id_to_label[i] for i in labels]
-        print()
-        print(f'label_names for img{i+1}', label_names)
 
         # # change to initial color
         # if not args.new_definitions:
@@ -286,67 +280,96 @@ def test_single(args, imgs_list, local_rank, model, gt_embs_list):
         #             mask = (prediction == label)
         #             prediction[mask] = UNAME.index(args.user_label[label])
 
-        pred_color = color_seg(prediction)
-        vis_seg = visual_segments(pred_color, rgb)
 
-        vis_seg.save(os.path.splitext(save_path)[0] + '_vis.png')
         cv2.imwrite(save_path, prediction.astype(np.uint8))
-        
-def visual_segments(segments, rgb):
-    seg = Image.fromarray(segments)
-    rgb = Image.fromarray(rgb)
+        cv2.imwrite(os.path.splitext(save_path)[0] + '_vis.png',
+                    cv2.cvtColor(visual_segments(prediction, rgb, label_names), cv2.COLOR_BGR2RGB))
 
-    seg1 = seg.convert('RGBA')
-    rgb1 = rgb.convert('RGBA')
+        if args.get('calculate_accuracy',default=False):
+            current_accuracy = calculate_accuracy(rgb_path.split('.')[0] + '.xml', prediction)
+            print(f'accuracy for img{i + 1}', current_accuracy)
+            accuracies.append(current_accuracy)
 
-    vis_seg = Image.blend(rgb1, seg1, 0.8)
-    return vis_seg
-  
+    if accuracies:
+        overall_accuracy = np.mean(accuracies)
+        print(overall_accuracy)
+        with open(os.path.join(args.root_dir, args.save_folder, 'overall_accuracy.txt'),'w') as f:
+            f.write(str(overall_accuracy))
+
+
+def visual_segments(prediction, rgb, label_names):
+    pred_color = color_seg(prediction)
+    seg = cv2.cvtColor(pred_color, cv2.COLOR_BGR2BGRA)
+    rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2BGRA)
+    result = cv2.cvtColor(cv2.addWeighted(rgb, 0.7, seg, 0.3, 0.0), cv2.COLOR_BGRA2BGR)
+
+    return add_legend(result, [(PALETTE[i].tolist(), label) for i, label in label_names.items()])
+
+
 def organize_images(args, local_rank):
     imgs_dir = args.root_dir
     imgs_list = glob.glob(imgs_dir + f'/*.{args.img_file_type}')
     imgs_list.sort()
-    num_devices = args.gpus_num
+    num_devices = args.gpus_num or 1
 
     imgs_on_device = imgs_list[local_rank::num_devices]
     return imgs_on_device
+
 
 def main_worker(local_rank: int, cfg: dict):
     if cfg.distributed:
         global_rank = local_rank
         world_size = cfg.gpus_num
-        
-        torch.cuda.set_device(global_rank)
+
+        torch.cuda.set_device(DEVICE)
         dist.init_process_group(backend="nccl",
-                            init_method=cfg.dist_url,
-                            world_size=world_size,
-                            rank=global_rank,)
+                                init_method=cfg.dist_url,
+                                world_size=world_size,
+                                rank=global_rank, )
     do_test(cfg, local_rank)
+
+
+def mask_centers(mask: np.ndarray, label_mapping: dict) -> dict:
+    """
+    Compute the centers of masks by calculating their bounding boxes
+    """
+    result = {}
+
+    for label in label_mapping:
+        if label != 255:
+            row, col = np.where(mask == label)
+            if row.size > 0 and col.size > 0:
+                result[label] = (int(np.mean(col)), int(np.mean(row)))
+                # result[label] = [np.min(row), np.min(col), np.max(row), np.max(col)]
+
+    return result
+
 
 if __name__ == '__main__':
 
     args = get_parser()
     logger.info(args)
-    
+
     dist_url = 'tcp://127.0.0.1:6769'
     dist_url = dist_url[:-2] + str(os.getpid() % 100).zfill(2)
     args.dist_url = dist_url
-    
+
     num_gpus = torch.cuda.device_count()
     if num_gpus != args.gpus_num:
-        raise RuntimeError('The set gpus number cannot match the detected gpus number. Please check or set CUDA_VISIBLE_DEVICES')
-    
+        raise RuntimeError(
+            'The set gpus number cannot match the detected gpus number. Please check or set CUDA_VISIBLE_DEVICES')
+
     if num_gpus > 1:
         args.distributed = True
     else:
         args.distributed = False
-    
+
     save_path = os.path.join(args.root_dir, args.save_folder, 'id2labels.json')
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:
         json.dump(UNI_UID2UNAME, f)
-    
+
     if not args.distributed:
         main_worker(0, args)
     else:
-        mp.spawn(main_worker, nprocs=args.gpus_num, args=(args, ))
+        mp.spawn(main_worker, nprocs=args.gpus_num, args=(args,))

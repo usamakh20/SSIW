@@ -1,9 +1,3 @@
-import os
-import numpy as np
-import gensim
-import gensim.downloader
-
-
 UNI_UID2UNAME = {0: 'backpack', 1: 'umbrella', 2: 'bag', 3: 'tie', 4: 'suitcase', 5: 'case', 6: 'bird',
                  7: 'cat', 8: 'dog', 9: 'horse', 10: 'sheep', 11: 'cow', 12: 'elephant', 13: 'bear',
                  14: 'zebra', 15: 'giraffe', 16: 'animal_other', 17: 'microwave', 18: 'radiator', 19: 'oven',

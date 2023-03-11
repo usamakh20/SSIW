@@ -1,0 +1,44 @@
+TRAIN:
+  ignore_label: 255
+
+TEST:
+  base_size: 720
+  test_h: 640
+  test_w: 640
+  scales: [1.0]  
+  
+  test_gpu: [0, ]
+  model_path: 'models/segformer_7data.pth'
+  emb_path: 'models/universal_cat2vec.npy'
+
+  num_model_classes: 512
+  num_train_classes: 194
+  test_with_embeddings: False
+  logit_softmax_weight: 500
+  single_scale_single_crop: True
+  single_scale_multi_crop: False
+  multi_scale_multi_crop: False
+
+  emd_method: 'embeddings'
+  dataset_lib: dataset
+
+  distributed: False
+  
+  root_dir: 'test_imgs/cmp'
+  cam_id: 0
+  img_file_type: 'jpg'
+  save_folder: 'facade/'
+  calculate_accuracy: 1
+  new_definitions: {'background':'the part of a picture, scene, or design that forms a setting for the main figures or objects, or appears furthest from the viewer.',
+                     'facade': 'the front part of a building',
+                     'window': 'an opening in the wall or roof of a building usually made of shiny glass',
+                     'door': 'an entrance to a building',
+                     'cornice': 'any horizontal decorative moulding that crowns a building',
+                     'sill': 'the bottom horizontal part of a building to which vertical members are attached',
+                     'balcony': 'a platform projecting from a building, supported by columns or console brackets',
+                     'blind': 'a type of window covering',
+                     'deco': 'a decorative style of bold geometric shapes and bright colours',
+                     'molding': 'a defining, transitional, or terminal element that contours or outlines the edges and surfaces on a building',
+                     'pillar': 'isolated, vertical structure such as a pier, column, or post',
+                     'shop': 'a part of a building where goods or services are sold'}
+  user_label: ['background','facade','window','door','cornice','sill','balcony','blind','deco','molding','pillar','shop']

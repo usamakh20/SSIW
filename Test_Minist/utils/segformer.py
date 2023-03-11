@@ -4,13 +4,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
 
-#from mmseg.models.builder import BACKBONES
+# from mmseg.models.builder import BACKBONES
 from mmseg.utils import get_root_logger
 from mmcv.runner import load_checkpoint
 from mmcv.cnn import ConvModule, DepthwiseSeparableConvModule
 
 import math
-#from .decode_heads.decode_head import BaseDecodeHead
+# from .decode_heads.decode_head import BaseDecodeHead
 from utils.decode_heads.aspp_head import ASPPHead, ASPPModule
 from mmcv.cnn.bricks import build_norm_layer
 from mmseg.ops import resize
@@ -19,7 +19,10 @@ from mmseg.ops import resize
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import logging
 from utils.decode_heads.segformer_head import SegFormerHead
+
 logger = logging.getLogger(__name__)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 class FCNHead(nn.Module):
     """Fully Convolution Networks for Semantic Segmentation.
@@ -55,8 +58,8 @@ class FCNHead(nn.Module):
                 kernel_size=kernel_size,
                 padding=kernel_size // 2,  #
                 conv_cfg=None,
-                norm_cfg=self.norm_cfg, # sync bn
-                act_cfg=self.act_cfg)) # relu
+                norm_cfg=self.norm_cfg,  # sync bn
+                act_cfg=self.act_cfg))  # relu
 
         self.convs = nn.Sequential(*convs)
         self.cls_seg = nn.Conv2d(in_channels=self.channels, out_channels=self.num_classes,
@@ -68,6 +71,7 @@ class FCNHead(nn.Module):
         output = self.convs(x)
         output = self.cls_seg(output)
         return output
+
 
 class DepthwiseSeparableASPPModule(ASPPModule):
     """Atrous Spatial Pyramid Pooling (ASPP) Module with depthwise separable
@@ -124,7 +128,6 @@ class DynHead(nn.Module):
             nn.Conv2d(in_channels // channel_reduce_factor, num_out_channel, 1)
         )
 
-
         if zero_init:
             nn.init.constant_(self.classifier[-1].weight, 0)
         else:
@@ -138,7 +141,7 @@ class DynHead(nn.Module):
         return self.classifier(feature)
 
 
-#@HEADS.register_module()
+# @HEADS.register_module()
 class BilinearPADHead_fast_xavier_init(ASPPHead):
     """Encoder-Decoder with Atrous Separable Convolution for Semantic Image
     Segmentation.
@@ -220,20 +223,19 @@ class BilinearPADHead_fast_xavier_init(ASPPHead):
         self.register_buffer("coord", coord_tmp.float(), persistent=False)
 
     def computer_locations_per_level(self, height, width, h=8, w=8):
-        shifts_x = torch.arange(0, 1, step=1/w, dtype=torch.float32)
-        shifts_y = torch.arange(0, 1, step=1/h, dtype=torch.float32)
+        shifts_x = torch.arange(0, 1, step=1 / w, dtype=torch.float32)
+        shifts_y = torch.arange(0, 1, step=1 / h, dtype=torch.float32)
         shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
         locations = torch.stack((shift_x, shift_y), dim=0)
         stride_h = height // 32
         stride_w = width // 32
-        coord = locations.repeat(stride_h*stride_w, 1, 1, 1)
+        coord = locations.repeat(stride_h * stride_w, 1, 1, 1)
         return coord
-
 
     def forward(self, inputs):
         """Forward function."""
         # inputs: [1/32 stage, 1/4 stage]
-        x = inputs[0] # 1/32 stage
+        x = inputs[0]  # 1/32 stage
 
         aspp_outs = [
             resize(
@@ -298,7 +300,7 @@ class BilinearPADHead_fast_xavier_init(ASPPHead):
         B, conv_ch, H, W = x.size()
         weights, biases = self.get_subnetworks_params_fast(x, channels=dy_ch)
         f = self.upsample_f
-        #self.coord_generator(H, W)
+        # self.coord_generator(H, W)
         coord = self.coord.reshape(1, H, W, 2, f, f).permute(0, 3, 1, 4, 2, 5).reshape(1, 2, H * f, W * f)
         coord = coord.repeat(B, 1, 1, 1)
         if x_cat is not None:
@@ -405,22 +407,21 @@ class BilinearPADHead_fast_xavier_init(ASPPHead):
         H = height
         W = width
         coord = coord.repeat(H * W, 1, 1, 1)
-        self.coord = coord.to(device='cuda')
+        self.coord = coord.to(device=DEVICE)
 
 
 def compute_locations_per_level(h, w):
     shifts_x = torch.arange(
         0, 1, step=1 / w,
-        dtype=torch.float32, device='cuda'
+        dtype=torch.float32, device=DEVICE
     )
     shifts_y = torch.arange(
         0, 1, step=1 / h,
-        dtype=torch.float32, device='cuda'
+        dtype=torch.float32, device=DEVICE
     )
     shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
     locations = torch.stack((shift_x, shift_y), dim=0)
     return locations
-
 
 
 class Mlp(nn.Module):
@@ -617,13 +618,13 @@ class MixVisionTransformer(nn.Module):
 
         # patch_embed
         self.patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
-                                              embed_dim=embed_dims[0]) # 1/4
+                                              embed_dim=embed_dims[0])  # 1/4
         self.patch_embed2 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=3, stride=2, in_chans=embed_dims[0],
-                                              embed_dim=embed_dims[1]) # 1/8
+                                              embed_dim=embed_dims[1])  # 1/8
         self.patch_embed3 = OverlapPatchEmbed(img_size=img_size // 8, patch_size=3, stride=2, in_chans=embed_dims[1],
-                                              embed_dim=embed_dims[2]) # auxilary output
+                                              embed_dim=embed_dims[2])  # auxilary output
         self.patch_embed4 = OverlapPatchEmbed(img_size=img_size // 16, patch_size=3, stride=2, in_chans=embed_dims[2],
-                                              embed_dim=embed_dims[3]) # 1/32
+                                              embed_dim=embed_dims[3])  # 1/32
 
         # transformer encoder
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
@@ -775,8 +776,7 @@ class DWConv(nn.Module):
         return x
 
 
-
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b0(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b0, self).__init__(
@@ -785,7 +785,7 @@ class mit_b0(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
 
 
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b1(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b1, self).__init__(
@@ -794,7 +794,7 @@ class mit_b1(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
 
 
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b2(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b2, self).__init__(
@@ -803,7 +803,7 @@ class mit_b2(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
 
 
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b3(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b3, self).__init__(
@@ -812,7 +812,7 @@ class mit_b3(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
 
 
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b4(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b4, self).__init__(
@@ -821,7 +821,7 @@ class mit_b4(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
 
 
-#@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class mit_b5(MixVisionTransformer):
     def __init__(self, **kwargs):
         super(mit_b5, self).__init__(
@@ -829,8 +829,9 @@ class mit_b5(MixVisionTransformer):
             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
             drop_rate=0.0, drop_path_rate=0.1)
 
+
 class SegFormer(nn.Module):
-    def __init__(self, num_classes, load_imagenet_model, imagenet_ckpt_fpath, **kwargs):
+    def __init__(self, num_classes, load_imagenet_model, imagenet_ckpt_fpath, batch_norm_gpu, **kwargs):
         super(SegFormer, self).__init__(**kwargs)
 
         self.encoder = mit_b5()
@@ -856,21 +857,22 @@ class SegFormer(nn.Module):
         self.head = SegFormerHead(num_classes=num_classes,
                                   in_channels=[64, 128, 320, 512],
                                   channels=128,
-                                  in_index=[0,1,2,3],
+                                  in_index=[0, 1, 2, 3],
                                   feature_strides=[4, 8, 16, 32],
-                                  #decoder_params=dict(embed_dim=768),
+                                  # decoder_params=dict(embed_dim=768),
                                   dropout_ratio=0.1,
-                                  norm_cfg=dict(type='SyncBN', requires_grad=True),
-                                  align_corners=False)
+                                  norm_cfg=dict(type='SyncBN' if batch_norm_gpu else 'BN', requires_grad=True),
+                                  align_corners=False,
+                                  **kwargs)
         self.auxi_net = FCNHead(num_convs=1,
                                 kernel_size=3,
                                 concat_input=True,
                                 in_channels=320,
                                 num_classes=num_classes,
-                                norm_cfg=dict(type='SyncBN', requires_grad=True))
+                                norm_cfg=dict(type='SyncBN' if batch_norm_gpu else 'BN', requires_grad=True))
         self.init_weights(load_imagenet_model, imagenet_ckpt_fpath)
 
-    def init_weights(self, load_imagenet_model: bool=False, imagenet_ckpt_fpath: str='') -> None:
+    def init_weights(self, load_imagenet_model: bool = False, imagenet_ckpt_fpath: str = '') -> None:
         """ For training, we use a models pretrained on ImageNet. Irrelevant at inference.
             Args:
             -   pretrained_fpath: str representing path to pretrained models
@@ -892,44 +894,51 @@ class SegFormer(nn.Module):
         h = inputs.size()[2]
         w = inputs.size()[3]
         x = self.encoder(inputs)
-        #out = self.head([x[3], x[0]])
+        # out = self.head([x[3], x[0]])
         out = self.head(x)
         auxi_out = self.auxi_net(x)
-        high_out = F.interpolate(out, size=(h,w), mode='bilinear', align_corners=True)
+        high_out = F.interpolate(out, size=(h, w), mode='bilinear', align_corners=True)
         return high_out, out, auxi_out
 
 
 class SegModel(nn.Module):
-    def __init__(self, criterions, num_classes, load_imagenet_model, imagenet_ckpt_fpath, **kwargs):
+    def __init__(self, criterions, num_classes, load_imagenet_model, imagenet_ckpt_fpath, batch_norm_gpu, **kwargs):
         super(SegModel, self).__init__(**kwargs)
         self.segmodel = SegFormer(num_classes=num_classes,
                                   load_imagenet_model=load_imagenet_model,
-                                  imagenet_ckpt_fpath=imagenet_ckpt_fpath)
+                                  imagenet_ckpt_fpath=imagenet_ckpt_fpath,
+                                  batch_norm_gpu=batch_norm_gpu)
         self.criterion = None
+
     def forward(self, inputs, gt=None, label_space=None, others=None):
         high_reso, low_reso, auxi_out = self.segmodel(inputs)
         return high_reso, None, None
 
+
 def get_seg_model(
-    criterion: list,
-    n_classes: int,
-    load_imagenet_model: bool = False,
-    imagenet_ckpt_fpath: str = '',
-    **kwargs
-    ) -> nn.Module:
+        criterion: list,
+        n_classes: int,
+        load_imagenet_model: bool = False,
+        imagenet_ckpt_fpath: str = '',
+        batch_norm_gpu: bool = True,
+        **kwargs
+) -> nn.Module:
     model = SegModel(criterions=criterion,
                      num_classes=n_classes,
                      load_imagenet_model=load_imagenet_model,
-                     imagenet_ckpt_fpath=imagenet_ckpt_fpath)
+                     imagenet_ckpt_fpath=imagenet_ckpt_fpath,
+                     batch_norm_gpu=batch_norm_gpu)
     assert isinstance(model, nn.Module)
     return model
 
+
 def get_configured_segformer(
-    n_classes: int,
-    criterion: list,
-    load_imagenet_model: bool = False,
-    imagenet_ckpt_fpath: str = '',
-    ) -> nn.Module:
+        n_classes: int,
+        criterion: list,
+        load_imagenet_model: bool = False,
+        imagenet_ckpt_fpath: str = '',
+        batch_norm_gpu: bool = True
+) -> nn.Module:
     """
         Args:
         -   n_classes: integer representing number of output classes
@@ -942,14 +951,14 @@ def get_configured_segformer(
                 (at training, init using imagenet-pretrained models)
     """
 
-    model = get_seg_model(criterion, n_classes, load_imagenet_model, imagenet_ckpt_fpath)
+    model = get_seg_model(criterion, n_classes, load_imagenet_model, imagenet_ckpt_fpath, batch_norm_gpu)
     return model
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     imagenet_ckpt_fpath = ''
     load_imagenet_model = False
-    criterions=[]
+    criterions = []
     from mseg_semantic.model.criterion import Cross_sim_loss
 
     loss_method = Cross_sim_loss(data_index=['universal'],

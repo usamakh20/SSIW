@@ -1,4 +1,17 @@
+import xml.etree.ElementTree as ET
 import numpy as np
+import cv2
+
+# Define the size of the rectangle
+rectangle_size = 0.1
+
+# Create a blank image to draw the legend on
+legend_height = 700
+legend_width = 300
+
+font_scale = 0.8
+thickness = 1
+font = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def make_palette(num_classes=256):
@@ -25,6 +38,7 @@ def make_palette(num_classes=256):
     palette[num_classes - 1, :] = [255, 255, 255]
     return palette
 
+
 PALETTE = make_palette(256)
 
 
@@ -35,8 +49,9 @@ def color_seg(seg, palette=None):
         color_out = palette[seg.reshape(-1)].reshape(seg.shape + (3,))
     return color_out
 
+
 def color_map_list(class_num):
-    map1 =  np.asarray([
+    map1 = np.asarray([
         [0, 0, 0],
         [120, 120, 120],
         [180, 120, 120],
@@ -185,48 +200,48 @@ def color_map_list(class_num):
         [25, 194, 194],
         [102, 255, 0],
         [92, 0, 255],
-      [165, 42, 42],
-      [0, 192, 0],
-      [196, 196, 196],
-      [190, 153, 153],
-      [180, 165, 180],
-      [102, 102, 156],
-      [128, 64, 255],
-      [140, 140, 200],
-      [170, 170, 170],
-      [250, 170, 160],
-      [96, 96, 96],
-      [230, 150, 140],
-      [128, 64, 128],
-      [110, 110, 110],
-      [244, 35, 232],
-      [150, 100, 100],
-      [70, 70, 70],
-      [150, 120, 90],
-      [220, 20, 60],
-      [255, 0, 0],
-      [200, 128, 128],
-      [64, 170, 64],
-      [128, 64, 64],
-      [70, 130, 180],
-      [152, 251, 152],
-      [107, 142, 35],
-      [0, 170, 30],
-      [255, 255, 128],
-      [250, 0, 30],
-      [220, 220, 220],
-      [222, 40, 40],
-      [100, 170, 30],
-      [40, 40, 40],
-      [33, 33, 33],
-      [0, 0, 142],
-      [210, 170, 100],
-      [153, 153, 153],
-      [128, 128, 128],
-      [250, 170, 30],
-      [192, 192, 192],
-      [220, 220, 0],
-      [119, 11, 32],
+        [165, 42, 42],
+        [0, 192, 0],
+        [196, 196, 196],
+        [190, 153, 153],
+        [180, 165, 180],
+        [102, 102, 156],
+        [128, 64, 255],
+        [140, 140, 200],
+        [170, 170, 170],
+        [250, 170, 160],
+        [96, 96, 96],
+        [230, 150, 140],
+        [128, 64, 128],
+        [110, 110, 110],
+        [244, 35, 232],
+        [150, 100, 100],
+        [70, 70, 70],
+        [150, 120, 90],
+        [220, 20, 60],
+        [255, 0, 0],
+        [200, 128, 128],
+        [64, 170, 64],
+        [128, 64, 64],
+        [70, 130, 180],
+        [152, 251, 152],
+        [107, 142, 35],
+        [0, 170, 30],
+        [255, 255, 128],
+        [250, 0, 30],
+        [220, 220, 220],
+        [222, 40, 40],
+        [100, 170, 30],
+        [40, 40, 40],
+        [33, 33, 33],
+        [0, 0, 142],
+        [210, 170, 100],
+        [153, 153, 153],
+        [128, 128, 128],
+        [250, 170, 30],
+        [192, 192, 192],
+        [220, 220, 0],
+        [119, 11, 32],
         [0, 80, 100],
         [149, 32, 32],
         [10, 59, 140],
@@ -242,3 +257,61 @@ def color_map_list(class_num):
     pa = np.ones((class_num, 3), dtype=np.uint8) * 255
     pa[:map1.shape[0], :] = map1
     return pa
+
+
+def add_legend(image, entries):
+    legend = np.zeros((legend_height, legend_width, 3), dtype=np.uint8)
+    # Loop through the colors and draw rectangles and labels
+    for i, (color, label) in enumerate(entries):
+        # Calculate the position of the rectangle
+        x1 = int(legend_width * 0.05)
+        y1 = int(i * 50 + 0.05 * legend_height)
+        x2 = int(legend_width * (0.05 + rectangle_size))
+        y2 = int((i + 1) * 50 - 0.05 * legend_height)
+        # Draw the rectangle
+        cv2.rectangle(legend, (x1, y1), (x2, y2), color, -1)
+
+        # Draw the label
+        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+        text_x = int(legend_width * (0.05 + rectangle_size + 0.05))
+        text_y = int(y1 + (y2 - y1 + text_size[1]) / 2)
+        cv2.putText(legend, label, (text_x, text_y), font, font_scale, color, thickness, cv2.LINE_AA)
+
+    # Find the largest height between the two images
+    max_height = max(image.shape[0], legend.shape[0])
+
+    # Determine the amount of padding required for each image
+    padding1 = (max_height - image.shape[0]) // 2
+    padding2 = (max_height - legend.shape[0]) // 2
+
+    # Create a blank image with the largest height and the combined width
+    combined_width = image.shape[1] + legend.shape[1]
+    result = np.zeros((max_height, combined_width, 3), dtype=np.uint8)
+
+    # Paste the first image into the blank image with padding
+    result[padding1:padding1 + image.shape[0], :image.shape[1]] = image
+
+    # Paste the second image into the blank image with padding
+    result[padding2:padding2 + legend.shape[0], image.shape[1]:] = legend
+
+    return result
+
+
+def calculate_accuracy(xml_file, predicted):
+    with open(xml_file) as f:
+        data = '<root>' + f.read() + '</root>'
+
+    predicted[predicted == 255] = 0
+    root = ET.fromstring(data)
+    mask = np.zeros(predicted.shape, dtype=np.uint8)
+    for obj in root.findall('object'):
+        label = int(obj.find('label').text)
+        points = obj.find('points')
+        x = [int(float(pt.text) * mask.shape[0]) - 1 for pt in points.findall('x')]
+        y = [int(float(pt.text) * mask.shape[1]) - 1 for pt in points.findall('y')]
+        cv2.rectangle(mask, (y[0], x[0]), (y[1], x[1]), label, -1)
+
+    correct = np.equal(predicted, mask).sum()
+    accuracy = correct / (mask.shape[0]*mask.shape[1])
+
+    return accuracy

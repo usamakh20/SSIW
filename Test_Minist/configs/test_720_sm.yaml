@@ -23,9 +23,6 @@ TEST:
   dataset_lib: dataset
 
   distributed: False
-  
-  root_dir: ''
-  cam_id: 0
-  img_file_type: 'jpeg'
-  gpus_num: 1
-  save_folder: ''
+
+  img_file_type: 'png'
+  gpus_num: 0

@@ -53,6 +53,12 @@ class CfgNode(dict):
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, super(CfgNode, self).__repr__())
 
+    def get(self, __key: str, default=None):
+        if __key in self:
+            return self[__key]
+        else:
+            return default
+
 
 def load_cfg_from_cfg_file(file):
     cfg = {}

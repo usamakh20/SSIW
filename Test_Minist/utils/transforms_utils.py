@@ -4,7 +4,8 @@ import random
 import torch
 from typing import Optional, Tuple
 
-def get_imagenet_mean_std() -> Tuple[Tuple[float,float,float], Tuple[float,float,float]]:
+
+def get_imagenet_mean_std() -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
     """ See use here in Pytorch ImageNet script: 
         https://github.com/pytorch/examples/blob/master/imagenet/main.py#L197
         Returns:
@@ -17,11 +18,11 @@ def get_imagenet_mean_std() -> Tuple[Tuple[float,float,float], Tuple[float,float
     std = [0.229, 0.224, 0.225]
     std = [item * value_scale for item in std]
     return mean, std
-            
 
-def normalize_img(  input: torch.Tensor, 
-                    mean: Tuple[float,float,float], 
-                    std: Optional[Tuple[float,float,float]] = None):
+
+def normalize_img(input: torch.Tensor,
+                  mean: Tuple[float, float, float],
+                  std: Optional[Tuple[float, float, float]] = None):
     """ Pass in by reference Torch tensor, and normalize its values.
         Args:
         -   input: Torch tensor of shape (3,M,N), must be in this order, and
@@ -38,13 +39,13 @@ def normalize_img(  input: torch.Tensor,
         for t, m, s in zip(input, mean, std):
             t.sub_(m).div_(s)
 
-            
+
 def pad_to_crop_sz(
-    image: np.ndarray,
-    crop_h: int,
-    crop_w: int,
-    mean: Tuple[float,float,float]
-    ) -> Tuple[np.ndarray,int,int]:
+        image: np.ndarray,
+        crop_h: int,
+        crop_w: int,
+        mean: Tuple[float, float, float]
+) -> Tuple[np.ndarray, int, int]:
     ori_h, ori_w, _ = image.shape
     pad_h = max(crop_h - ori_h, 0)
     pad_w = max(crop_w - ori_w, 0)
@@ -63,9 +64,9 @@ def pad_to_crop_sz(
 
 
 def resize_by_scaled_short_side(
-    image: np.ndarray,
-    base_size: int,
-    scale: float) -> np.ndarray:
+        image: np.ndarray,
+        base_size: int,
+        scale: float) -> np.ndarray:
     """ Equivalent to ResizeShort(), but functional, instead of OOP paradigm, and w/ scale param.
 
 	Args:

@@ -28,7 +28,7 @@ class SegFormerHead(BaseDecodeHead):
     """
     SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers
     """
-    def __init__(self, feature_strides, **kwargs):
+    def __init__(self, feature_strides, norm_cfg, **kwargs):
         super(SegFormerHead, self).__init__(input_transform='multiple_select', **kwargs)
         assert len(feature_strides) == len(self.in_channels)
         assert min(feature_strides) == feature_strides[0]
@@ -48,7 +48,7 @@ class SegFormerHead(BaseDecodeHead):
             in_channels=embedding_dim*4,
             out_channels=embedding_dim,
             kernel_size=1,
-            norm_cfg=dict(type='SyncBN', requires_grad=True)
+            norm_cfg=norm_cfg
         )
 
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
